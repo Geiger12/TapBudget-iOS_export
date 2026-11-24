@@ -7,6 +7,8 @@
 //   3. Target > General > Minimum Deployments: iOS 26.0 (the Liquid Glass APIs start there).
 //   4. Run. The first launch opens an example budget. To bring in your real one, save a backup file
 //      from the web app, then Settings > Back up > Import a backup, and paste it in.
+//   5. The slide-out menu opens from the button at the top left of every screen, or by swiping right from the
+//      left edge. Wallpaper, colors, Flat or Glass, switch styles and Easy mode are in it.
 
 import SwiftUI
 
@@ -19,7 +21,6 @@ struct TapBudgetApp: App {
         WindowGroup {
             ContentView()
                 .environment(store)
-                .tint(.teal)
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {

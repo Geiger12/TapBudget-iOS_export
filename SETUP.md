@@ -87,3 +87,13 @@ Internal testers get a build as soon as it finishes processing. Only external te
 Needed later for the App Store (not for TestFlight): privacy policy URL
 https://tapbudget-ashy.vercel.app/about/privacy.html, the App Privacy answers (the privacy manifest in this
 project says no data is collected), and screenshots.
+
+## Updating a build you already have in TestFlight
+
+You only need to replace the two Swift files and push. Xcode Cloud builds on every push to main and gives each
+build its own number (the number shows in the app's menu, for example "version 2.0 (12)").
+
+1. On github.com open your `TapBudget-iOS` repository, then the `TapBudget` folder.
+2. Add file > Upload files, drag in the new `App.swift` and `ContentView.swift` (same names), and Commit.
+3. Watch the build in Xcode's Report navigator or in App Store Connect > Xcode Cloud. When it finishes and
+   processes, the new build appears in the TestFlight app on your iPhone.
