@@ -2890,7 +2890,7 @@ struct ImportSheet: View {
 extension Color {
     init(hex: String) {
         let s = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        let v = Scanner(string: s).scanHexInt64() ?? 0
+        let v = UInt64(s, radix: 16) ?? 0                    // plain Swift: no Scanner, so no SDK differences
         self.init(.sRGB, red: Double((v >> 16) & 0xff) / 255, green: Double((v >> 8) & 0xff) / 255, blue: Double(v & 0xff) / 255, opacity: 1)
     }
 
