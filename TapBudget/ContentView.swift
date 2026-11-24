@@ -902,6 +902,54 @@ extension Budget {
     }
 }
 
+// MARK: - The cash flow chart's vertical scale
+
+/// A tidy vertical scale: even steps (1, 2, 2.5 or 5 times a power of ten), with the first and last tick as the chart's edges.
+struct ChartAxis: Equatable {
+    var lo: Double
+    var hi: Double
+    var step: Double
+    var ticks: [Double] {
+        let n = max(1, Int(((hi - lo) / step).rounded()))
+        return (0...n).map { lo + Double($0) * step }
+    }
+}
+
+func niceStep(_ raw: Double) -> Double {
+    guard raw > 0, raw.isFinite else { return 100 }
+    let mag = pow(10, floor(log10(raw)))
+    for m in [1.0, 2.0, 2.5, 5.0, 10.0] where m * mag >= raw - 1e-9 { return m * mag }
+    return 10 * mag
+}
+
+/// The vertical scale for the part of the chart that is on screen.
+/// - values: every balance that is on screen (the line, the old plan, the balances you typed, the bars)
+/// - warn: the low balance line; it is kept in view when it is close to the balance, and left out when it is far away
+/// - fixedSpan: 0 fits what you see; otherwise the chart is exactly that many dollars tall, centred on what you see
+func chartAxis(values: [Double], warn: Double, fixedSpan: Double = 0) -> ChartAxis {
+    let vmin = values.min(), vmax = values.max()
+    if fixedSpan > 0 {
+        let mid = (vmin != nil && vmax != nil) ? (vmin! + vmax!) / 2 : fixedSpan / 2 - fixedSpan / 10
+        let step = fixedSpan / 5
+        let lo = ((mid - fixedSpan / 2) / step).rounded(.down) * step
+        return ChartAxis(lo: lo, hi: lo + fixedSpan, step: step)
+    }
+    var lo = vmin ?? 0
+    var hi = vmax ?? 2000
+    let slack = max(hi - lo, 500)
+    if warn >= lo - slack && warn <= hi + slack { lo = min(lo, warn); hi = max(hi, warn) }       // keep the low-balance line in view when it is near
+    if lo > 0 && lo < (hi - lo) * 0.5 { lo = 0 }                                                   // show the $0 line when the balance is near it
+    let atZero = lo == 0
+    if hi - lo < 500 { let mid = (hi + lo) / 2; lo = mid - 250; hi = mid + 250 }                    // a flat line does not zoom in absurdly far
+    let pad = (hi - lo) * 0.06
+    if !atZero { lo -= pad }
+    hi += pad
+    let step = niceStep((hi - lo) / 5)
+    lo = (lo / step).rounded(.down) * step
+    hi = (hi / step).rounded(.up) * step
+    return ChartAxis(lo: lo, hi: hi, step: step)
+}
+
 // MARK: - The store: saving, automatic payments, and every change the screens make
 
 enum SheetKind: Identifiable {
@@ -2179,6 +2227,29 @@ struct CashExplorer: View {
     @State private var nowText = ""
     @State private var nowDay = Date()
     @State private var formError: String?
+    @AppStorage("explorerYSpan") private var ySpan = 0.0           // 0 = fit what is on screen, otherwise the chart's height in dollars
+
+    /// Every balance that is on screen right now, so the vertical scale can fit it.
+    private func onScreenValues(_ s: Budget.Series, _ b: Budget) -> [Double] {
+        let start = scrollDate
+        let end = scrollDate.addingTimeInterval(visibleDays * 86400)
+        func inView(_ pts: [Budget.SeriesPoint]) -> [Double] {
+            var v = pts.filter { $0.date >= start && $0.date <= end }.map(\.value)
+            if let before = pts.last(where: { $0.date < start }) { v.append(before.value) }      // a step that began before the left edge is still on screen
+            return v
+        }
+        var values = inView(s.points)
+        if let plan { values += inView(plan.points) }
+        for a in b.cash.actuals {
+            if let d = YMD(iso: a.d)?.date, d >= start, d <= end { values.append(a.v) }
+        }
+        if visibleDays <= 80 {
+            for st in s.steps where !st.isActual && st.date >= start && st.date <= end { values.append(st.before); values.append(st.after) }
+        }
+        return values
+    }
+
+    private func axisLabel(_ d: Double) -> String { abs(d) >= 10_000 ? kfmt(d) : money(d, whole: true) }
 
     private var maxDays: Double {
         guard let s = series else { return 365 }
@@ -2226,6 +2297,7 @@ struct CashExplorer: View {
         let lastActual = b.cash.actuals.last
         let sel = nearestStep(s)
         let presets: [(String, Double)] = [("1 month", 31), ("3 months", 92), ("6 months", 183), ("1 year", 365)]
+        let axis = chartAxis(values: onScreenValues(s, b), warn: b.cash.warn, fixedSpan: ySpan)
 
         GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
@@ -2260,6 +2332,16 @@ struct CashExplorer: View {
                         .themedButton()
                         .tint(abs(visibleDays - p.1) < p.1 * 0.12 ? palette.primary : nil)
                 }
+                Menu {
+                    Picker("Chart height", selection: $ySpan) {
+                        Text("Auto: fit what I see").tag(0.0)
+                        ForEach([2_500.0, 5_000, 10_000, 20_000, 50_000], id: \.self) { v in Text("\(money(v, whole: true)) tall").tag(v) }
+                    }
+                } label: {
+                    Label(ySpan == 0 ? "Scale: auto" : "Scale: \(money(ySpan, whole: true))", systemImage: "arrow.up.and.down")
+                }
+                .menuStyle(.button)
+                .themedButton()
             }
         }
 
@@ -2310,13 +2392,21 @@ struct CashExplorer: View {
         .chartXVisibleDomain(length: visibleDays * 86400)
         .chartScrollPosition(x: $scrollDate)
         .chartXSelection(value: $selected)
+        .chartYScale(domain: axis.lo...axis.hi)
         .chartYAxis {
-            AxisMarks(position: .leading) { v in
+            AxisMarks(position: .leading, values: axis.ticks) { v in
                 AxisGridLine()
-                AxisValueLabel { if let d = v.as(Double.self) { Text(kfmt(d)).font(.caption2) } }
+                AxisValueLabel { if let d = v.as(Double.self) { Text(axisLabel(d)).font(.caption2) } }
             }
         }
-        .frame(height: 270)
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine()
+                AxisValueLabel(format: visibleDays > 200 ? Date.FormatStyle().month(.abbreviated) : Date.FormatStyle().month(.abbreviated).day())
+            }
+        }
+        .chartPlotStyle { plot in plot.clipped() }
+        .frame(height: 290)
         .simultaneousGesture(
             MagnifyGesture()
                 .onChanged { v in visibleDays = min(max(baseDays / v.magnification, 7), maxDays) }
@@ -2333,7 +2423,7 @@ struct CashExplorer: View {
     }
 
     private func caption(_ st: Budget.SeriesStep?) -> String {
-        guard let st else { return "Drag to move. Pinch, or use + and −, to zoom. Tap a bar for details." }
+        guard let st else { return "Drag to move. Pinch, or use + and −, to zoom. Tap a bar for details. Scale changes how tall the chart is." }
         if st.isActual { return "\(st.due.nice): you typed your balance, \(money(st.after)) (the plan said \(money(st.before)))." }
         return "\(st.due.nice): \(st.name) \(st.amt > 0 ? "+" : "−")\(money(abs(st.amt))). Balance after: \(money(st.after))."
     }
